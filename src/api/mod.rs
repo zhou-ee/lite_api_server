@@ -13,6 +13,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/chat/completions", post(openai::chat_completions))
         .route("/admin/config", get(admin::get_config).put(admin::put_config))
         .route("/admin/diagnostics", get(diagnostics::get_diagnostics))
+        .route("/admin/routing/preview", get(diagnostics::preview_route))
         .route("/admin/logs", get(admin::get_logs))
         .route("/admin/stats/today", get(admin::stats_today))
         .route("/admin/stats/providers", get(admin::stats_providers))
