@@ -86,7 +86,14 @@ fn check_routes(config: &AppConfig, items: &mut Vec<DiagnosticItem>) {
     }
 
     let provider_ids = config.providers.iter().map(|p| p.id.as_str()).collect::<HashSet<_>>();
-    let supported_strategies = ["priority_fallback", "weighted", "cheapest", "lowest_latency"];
+    let supported_strategies = [
+        "priority_fallback",
+        "weighted",
+        "round_robin",
+        "weighted_random",
+        "cheapest",
+        "lowest_latency",
+    ];
 
     for (model, route) in &config.routes {
         if route.providers.is_empty() {
@@ -142,13 +149,13 @@ fn check_clients(config: &AppConfig, items: &mut Vec<DiagnosticItem>) {
 fn check_pricing(config: &AppConfig, items: &mut Vec<DiagnosticItem>) {
     for model in config.routes.keys() {
         if !config.pricing.contains_key(model) {
-            push(items, DiagnosticLevel::Info, "pricing_missing", format!("No pricing configured for model {}.", model));
+            push(items, DiagnosticLevel::Info, "pricing_missing", format!("No global pricing configured for model {}. Provider-level pricing may still be present.", model));
         }
     }
 
     for model in config.pricing.keys() {
         if !config.routes.contains_key(model) {
-            push(items, DiagnosticLevel::Info, "pricing_unused", format!("Pricing is configured for {}, but no route currently uses it.", model));
+            push(items, DiagnosticLevel::Info, "pricing_unused", format!("Global pricing is configured for {}, but no route currently uses it.", model));
         }
     }
 }
