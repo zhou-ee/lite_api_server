@@ -6,7 +6,7 @@ use anyhow::Context;
 use axum::Router;
 use clap::Parser;
 use core::{config::AppConfig, state::AppState};
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::{atomic::AtomicU64, Arc}};
 use telemetry::store::TelemetryStore;
 use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -45,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(RwLock::new(config)),
         telemetry,
         http: reqwest::Client::new(),
+        routing_cursor: Arc::new(AtomicU64::new(0)),
     };
 
     let app: Router = api::router()
