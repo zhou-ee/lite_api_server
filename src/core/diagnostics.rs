@@ -98,6 +98,13 @@ fn check_routes(config: &AppConfig, items: &mut Vec<DiagnosticItem>) {
         for provider_id in &route.providers {
             if !provider_ids.contains(provider_id.as_str()) {
                 push(items, DiagnosticLevel::Error, "route_unknown_provider", format!("Route {} references unknown provider {}.", model, provider_id));
+                continue;
+            }
+
+            if let Some(provider) = config.providers.iter().find(|p| p.id == *provider_id) {
+                if !provider.models.is_empty() && !provider.models.iter().any(|m| m == model) {
+                    push(items, DiagnosticLevel::Warning, "route_model_not_declared", format!("Route {} uses provider {}, but that provider does not declare this model.", model, provider_id));
+                }
             }
         }
     }
