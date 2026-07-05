@@ -25,6 +25,13 @@ pub struct RequestLog {
     pub estimated_cost_usd: Option<f64>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ClientUsageSummary {
+    pub request_count: i64,
+    pub total_tokens: i64,
+    pub estimated_cost_usd: f64,
+}
+
 impl TelemetryStore {
     pub async fn connect(path: &str) -> anyhow::Result<Self> {
         let url = format!("sqlite://{}?mode=rwc", path);
@@ -67,6 +74,9 @@ impl TelemetryStore {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_request_logs_model ON request_logs(requested_model, upstream_model);")
             .execute(&self.pool)
             .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_request_logs_client ON request_logs(client_name);")
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -106,6 +116,30 @@ impl TelemetryStore {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected())
+    }
+
+    pub async fn client_usage_today(&self, client_name: &str) -> anyhow::Result<ClientUsageSummary> {
+        let start_of_day = start_of_today_utc();
+        let row = sqlx::query(
+            r#"
+            SELECT
+              COUNT(*) as request_count,
+              COALESCE(SUM(total_tokens), 0) as total_tokens,
+              COALESCE(SUM(estimated_cost_usd), 0) as estimated_cost_usd
+            FROM request_logs
+            WHERE ts >= ? AND client_name = ?
+            "#,
+        )
+        .bind(start_of_day)
+        .bind(client_name)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(ClientUsageSummary {
+            request_count: row.get("request_count"),
+            total_tokens: row.get("total_tokens"),
+            estimated_cost_usd: row.get("estimated_cost_usd"),
+        })
     }
 
     pub async fn provider_latency_snapshot(&self) -> anyhow::Result<HashMap<String, f64>> {
