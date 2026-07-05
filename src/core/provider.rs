@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -7,6 +8,12 @@ pub enum ProviderKind {
     Anthropic,
     Gemini,
     OpenCode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderPricingConfig {
+    pub input_per_1m: f64,
+    pub output_per_1m: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,4 +27,6 @@ pub struct ProviderConfig {
     pub weight: i32,
     pub timeout_ms: u64,
     pub models: Vec<String>,
+    #[serde(default)]
+    pub pricing: HashMap<String, ProviderPricingConfig>,
 }
