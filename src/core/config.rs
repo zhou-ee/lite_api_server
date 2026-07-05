@@ -38,6 +38,12 @@ pub struct RouteConfig {
 pub struct ClientConfig {
     pub api_key: String,
     pub allowed_models: Vec<String>,
+    #[serde(default)]
+    pub max_daily_requests: Option<i64>,
+    #[serde(default)]
+    pub max_daily_tokens: Option<i64>,
+    #[serde(default)]
+    pub max_daily_cost_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +89,10 @@ impl AppConfig {
                 None
             }
         })
+    }
+
+    pub fn client(&self, name: &str) -> Option<&ClientConfig> {
+        self.clients.get(name)
     }
 
     pub fn estimate_price(
