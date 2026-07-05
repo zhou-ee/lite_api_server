@@ -1,7 +1,7 @@
 use crate::{
     core::{
         config::{AppConfig, RouteConfig},
-        provider::ProviderConfig,
+        provider::{ProviderConfig, ProviderKind},
         state::AppState,
     },
 };
@@ -12,7 +12,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 #[derive(Debug, Deserialize)]
 pub struct LogQuery {
@@ -73,6 +73,32 @@ pub async fn stats_today(
     Ok(Json(stats))
 }
 
+pub async fn stats_providers(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode> {
+    require_admin(&state, &headers).await?;
+    let stats = state
+        .telemetry
+        .provider_stats()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(stats))
+}
+
+pub async fn stats_models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode> {
+    require_admin(&state, &headers).await?;
+    let stats = state
+        .telemetry
+        .model_stats()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(stats))
+}
+
 pub async fn list_providers(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -123,6 +149,56 @@ pub async fn delete_provider(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(json!({"ok": true, "deleted": id})))
+}
+
+pub async fn healthcheck_provider(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, StatusCode> {
+    require_admin(&state, &headers).await?;
+
+    let provider = {
+        let config = state.config.read().await;
+        config.provider(&id).map_err(|_| StatusCode::NOT_FOUND)?.clone()
+    };
+
+    let started = Instant::now();
+    let result = match provider.kind {
+        ProviderKind::OpenaiCompatible => {
+            let url = format!("{}/models", provider.base_url.trim_end_matches('/'));
+            state
+                .http
+                .get(url)
+                .timeout(std::time::Duration::from_millis(provider.timeout_ms.min(15_000)))
+                .bearer_auth(provider.api_key)
+                .send()
+                .await
+        }
+        _ => {
+            return Ok(Json(json!({
+                "ok": false,
+                "provider_id": id,
+                "error": "healthcheck is not implemented for this provider kind yet"
+            })));
+        }
+    };
+
+    let latency_ms = started.elapsed().as_millis() as i64;
+    match result {
+        Ok(resp) => Ok(Json(json!({
+            "ok": resp.status().is_success(),
+            "provider_id": id,
+            "status": resp.status().as_u16(),
+            "latency_ms": latency_ms
+        }))),
+        Err(err) => Ok(Json(json!({
+            "ok": false,
+            "provider_id": id,
+            "error": err.to_string(),
+            "latency_ms": latency_ms
+        }))),
+    }
 }
 
 pub async fn list_routes(
