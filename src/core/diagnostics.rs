@@ -1,6 +1,6 @@
 use crate::core::{config::AppConfig, provider::ProviderKind};
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DiagnosticItem {
@@ -133,16 +133,14 @@ fn check_clients(config: &AppConfig, items: &mut Vec<DiagnosticItem>) {
 }
 
 fn check_pricing(config: &AppConfig, items: &mut Vec<DiagnosticItem>) {
-    let route_models = config.routes.keys().collect::<HashSet<_>>();
-    for model in &route_models {
-        if !config.pricing.contains_key(*model) {
+    for model in config.routes.keys() {
+        if !config.pricing.contains_key(model) {
             push(items, DiagnosticLevel::Info, "pricing_missing", format!("No pricing configured for model {}.", model));
         }
     }
 
-    let route_lookup = route_models.into_iter().map(|key| (key.clone(), true)).collect::<HashMap<_, _>>();
     for model in config.pricing.keys() {
-        if !route_lookup.contains_key(model) {
+        if !config.routes.contains_key(model) {
             push(items, DiagnosticLevel::Info, "pricing_unused", format!("Pricing is configured for {}, but no route currently uses it.", model));
         }
     }
