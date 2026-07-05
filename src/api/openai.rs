@@ -50,6 +50,10 @@ pub async fn chat_completions(
         Err(response) => return response,
     };
 
+    if let Err(response) = enforce_client_limits(&state, client_name.as_deref()).await {
+        return response;
+    }
+
     let latency_snapshot = state.telemetry.provider_latency_snapshot().await.unwrap_or_default();
     let plan = {
         let config = state.config.read().await;
@@ -222,6 +226,63 @@ async fn authorize_client(
         })),
     )
         .into_response())
+}
+
+async fn enforce_client_limits(state: &AppState, client_name: Option<&str>) -> Result<(), Response> {
+    let Some(client_name) = client_name else {
+        return Ok(());
+    };
+
+    let limits = {
+        let config = state.config.read().await;
+        let Some(client) = config.client(client_name) else {
+            return Ok(());
+        };
+        (
+            client.max_daily_requests,
+            client.max_daily_tokens,
+            client.max_daily_cost_usd,
+        )
+    };
+
+    if limits.0.is_none() && limits.1.is_none() && limits.2.is_none() {
+        return Ok(());
+    }
+
+    let usage = match state.telemetry.client_usage_today(client_name).await {
+        Ok(usage) => usage,
+        Err(error) => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "error": {
+                        "message": format!("failed to read client usage: {error}"),
+                        "type": "usage_check_error"
+                    }
+                })),
+            )
+                .into_response());
+        }
+    };
+
+    let blocked = limits.0.is_some_and(|limit| usage.request_count >= limit)
+        || limits.1.is_some_and(|limit| usage.total_tokens >= limit)
+        || limits.2.is_some_and(|limit| usage.estimated_cost_usd >= limit);
+
+    if blocked {
+        Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "error": {
+                    "message": "client daily limit reached",
+                    "type": "client_limit_reached"
+                }
+            })),
+        )
+            .into_response())
+    } else {
+        Ok(())
+    }
 }
 
 async fn send_openai_compatible(
