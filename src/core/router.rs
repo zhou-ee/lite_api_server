@@ -1,5 +1,6 @@
 use super::config::AppConfig;
 use anyhow::{anyhow, bail};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct RoutePlan {
@@ -9,7 +10,11 @@ pub struct RoutePlan {
 }
 
 impl RoutePlan {
-    pub fn select(config: &AppConfig, requested_model: &str) -> anyhow::Result<Self> {
+    pub fn select(
+        config: &AppConfig,
+        requested_model: &str,
+        provider_latency_ms: &HashMap<String, f64>,
+    ) -> anyhow::Result<Self> {
         let upstream_model = config.resolve_alias(requested_model).to_string();
         let route = config
             .routes
@@ -41,6 +46,20 @@ impl RoutePlan {
                     let b_score = model_price_score(config, &upstream_model).unwrap_or(f64::MAX)
                         + config.provider(b).map(|p| p.priority as f64 / 1000.0).unwrap_or(0.0);
                     a_score.partial_cmp(&b_score).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            "lowest_latency" => {
+                provider_ids.sort_by(|a, b| {
+                    let a_latency = provider_latency_ms.get(a).copied().unwrap_or(f64::MAX);
+                    let b_latency = provider_latency_ms.get(b).copied().unwrap_or(f64::MAX);
+                    a_latency
+                        .partial_cmp(&b_latency)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| {
+                            let a_priority = config.provider(a).map(|p| p.priority).unwrap_or(i32::MAX);
+                            let b_priority = config.provider(b).map(|p| p.priority).unwrap_or(i32::MAX);
+                            a_priority.cmp(&b_priority)
+                        })
                 });
             }
             _ => {
