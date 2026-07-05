@@ -11,6 +11,7 @@ use axum::{
 };
 use bytes::Bytes;
 use chrono::Utc;
+use reqwest::Response as UpstreamResponse;
 use serde_json::{json, Value};
 use std::time::Instant;
 use uuid::Uuid;
@@ -42,6 +43,7 @@ pub async fn chat_completions(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
+    let wants_stream = payload.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
     let client_name = match authorize_client(&state, &headers, &requested_model).await {
         Ok(name) => name,
@@ -87,50 +89,69 @@ pub async fn chat_completions(
             continue;
         }
 
-        match proxy_openai_compatible(&state, &provider, payload.clone()).await {
-            Ok((status, content_type, body)) => {
-                let latency_ms = started.elapsed().as_millis() as i64;
-                let usage = parse_usage(&body);
-
+        match send_openai_compatible(&state, &provider, payload.clone()).await {
+            Ok(upstream) => {
+                let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
                 let retryable = status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
                 if retryable && provider_id != plan.provider_ids.last().unwrap() {
                     last_error = Some(format!("upstream returned retryable status: {status}"));
                     continue;
                 }
 
-                let _ = state
-                    .telemetry
-                    .record_request(RequestLog {
-                        id: request_id.clone(),
-                        ts: Utc::now().timestamp(),
-                        client_name: client_name.clone(),
-                        provider_id: provider.id.clone(),
-                        requested_model: plan.requested_model.clone(),
-                        upstream_model: plan.upstream_model.clone(),
-                        status_code: status.as_u16() as i64,
-                        error_type: if status.is_success() { None } else { Some(status.to_string()) },
-                        latency_ms,
-                        input_tokens: usage.0,
-                        output_tokens: usage.1,
-                        total_tokens: usage.2,
-                        estimated_cost_usd: None,
-                    })
-                    .await;
-
-                let mut res = Response::new(Body::from(body));
-                *res.status_mut() = status;
-                if let Some(ct) = content_type {
-                    res.headers_mut().insert("content-type", ct);
+                if wants_stream {
+                    return stream_response(
+                        state.clone(),
+                        upstream,
+                        request_id,
+                        client_name,
+                        provider.id,
+                        plan.requested_model,
+                        plan.upstream_model,
+                        started,
+                    );
                 }
-                res.headers_mut().insert(
-                    "x-lite-api-request-id",
-                    HeaderValue::from_str(&request_id).unwrap(),
-                );
-                res.headers_mut().insert(
-                    "x-lite-api-provider",
-                    HeaderValue::from_str(&provider.id).unwrap_or_else(|_| HeaderValue::from_static("unknown")),
-                );
-                return res;
+
+                match buffered_response(upstream).await {
+                    Ok((status, content_type, body)) => {
+                        let latency_ms = started.elapsed().as_millis() as i64;
+                        let usage = parse_usage(&body);
+                        let estimated_price = {
+                            let config = state.config.read().await;
+                            config.estimate_price(&plan.upstream_model, usage.0, usage.1)
+                        };
+
+                        let _ = state
+                            .telemetry
+                            .record_request(RequestLog {
+                                id: request_id.clone(),
+                                ts: Utc::now().timestamp(),
+                                client_name: client_name.clone(),
+                                provider_id: provider.id.clone(),
+                                requested_model: plan.requested_model.clone(),
+                                upstream_model: plan.upstream_model.clone(),
+                                status_code: status.as_u16() as i64,
+                                error_type: if status.is_success() { None } else { Some(status.to_string()) },
+                                latency_ms,
+                                input_tokens: usage.0,
+                                output_tokens: usage.1,
+                                total_tokens: usage.2,
+                                estimated_cost_usd: estimated_price,
+                            })
+                            .await;
+
+                        let mut res = Response::new(Body::from(body));
+                        *res.status_mut() = status;
+                        if let Some(ct) = content_type {
+                            res.headers_mut().insert("content-type", ct);
+                        }
+                        add_gateway_headers(&mut res, &request_id, &provider.id);
+                        return res;
+                    }
+                    Err(e) => {
+                        last_error = Some(e.to_string());
+                        continue;
+                    }
+                }
             }
             Err(e) => {
                 last_error = Some(e.to_string());
@@ -202,27 +223,83 @@ async fn authorize_client(
         .into_response())
 }
 
-async fn proxy_openai_compatible(
+async fn send_openai_compatible(
     state: &AppState,
     provider: &crate::core::provider::ProviderConfig,
     payload: Value,
-) -> anyhow::Result<(StatusCode, Option<HeaderValue>, Bytes)> {
+) -> anyhow::Result<UpstreamResponse> {
     let url = format!("{}/chat/completions", provider.base_url.trim_end_matches('/'));
     let timeout = std::time::Duration::from_millis(provider.timeout_ms);
 
-    let resp = state
+    Ok(state
         .http
         .post(url)
         .timeout(timeout)
         .bearer_auth(provider.api_key.clone())
         .json(&payload)
         .send()
-        .await?;
+        .await?)
+}
 
-    let status = StatusCode::from_u16(resp.status().as_u16())?;
-    let content_type = resp.headers().get("content-type").cloned();
-    let body = resp.bytes().await?;
+async fn buffered_response(upstream: UpstreamResponse) -> anyhow::Result<(StatusCode, Option<HeaderValue>, Bytes)> {
+    let status = StatusCode::from_u16(upstream.status().as_u16())?;
+    let content_type = upstream.headers().get("content-type").cloned();
+    let body = upstream.bytes().await?;
     Ok((status, content_type, body))
+}
+
+fn stream_response(
+    state: AppState,
+    upstream: UpstreamResponse,
+    request_id: String,
+    client_name: Option<String>,
+    provider_id: String,
+    requested_model: String,
+    upstream_model: String,
+    started: Instant,
+) -> Response {
+    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let content_type = upstream.headers().get("content-type").cloned();
+
+    let telemetry = state.telemetry.clone();
+    let request_id_for_log = request_id.clone();
+    let provider_id_for_log = provider_id.clone();
+    tokio::spawn(async move {
+        let _ = telemetry
+            .record_request(RequestLog {
+                id: request_id_for_log,
+                ts: Utc::now().timestamp(),
+                client_name,
+                provider_id: provider_id_for_log,
+                requested_model,
+                upstream_model,
+                status_code: status.as_u16() as i64,
+                error_type: if status.is_success() { None } else { Some(status.to_string()) },
+                latency_ms: started.elapsed().as_millis() as i64,
+                input_tokens: None,
+                output_tokens: None,
+                total_tokens: None,
+                estimated_cost_usd: None,
+            })
+            .await;
+    });
+
+    let mut res = Response::new(Body::from_stream(upstream.bytes_stream()));
+    *res.status_mut() = status;
+    if let Some(ct) = content_type {
+        res.headers_mut().insert("content-type", ct);
+    }
+    add_gateway_headers(&mut res, &request_id, &provider_id);
+    res
+}
+
+fn add_gateway_headers(res: &mut Response, request_id: &str, provider_id: &str) {
+    if let Ok(value) = HeaderValue::from_str(request_id) {
+        res.headers_mut().insert("x-lite-api-request-id", value);
+    }
+    if let Ok(value) = HeaderValue::from_str(provider_id) {
+        res.headers_mut().insert("x-lite-api-provider", value);
+    }
 }
 
 fn parse_usage(body: &Bytes) -> (Option<i64>, Option<i64>, Option<i64>) {
