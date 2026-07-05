@@ -97,14 +97,39 @@ impl AppConfig {
 
     pub fn estimate_price(
         &self,
+        provider_id: &str,
         upstream_model: &str,
         input_tokens: Option<i64>,
         output_tokens: Option<i64>,
     ) -> Option<f64> {
-        let pricing = self.pricing.get(upstream_model)?;
         let input = input_tokens.unwrap_or_default().max(0) as f64;
         let output = output_tokens.unwrap_or_default().max(0) as f64;
+
+        if let Some(provider_price) = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .and_then(|provider| provider.pricing.get(upstream_model))
+        {
+            return Some((input / 1_000_000.0) * provider_price.input_per_1m + (output / 1_000_000.0) * provider_price.output_per_1m);
+        }
+
+        let pricing = self.pricing.get(upstream_model)?;
         Some((input / 1_000_000.0) * pricing.input_per_1m + (output / 1_000_000.0) * pricing.output_per_1m)
+    }
+
+    pub fn model_price_score(&self, provider_id: &str, upstream_model: &str) -> Option<f64> {
+        if let Some(provider_price) = self
+            .providers
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .and_then(|provider| provider.pricing.get(upstream_model))
+        {
+            return Some(provider_price.input_per_1m + provider_price.output_per_1m);
+        }
+
+        let pricing = self.pricing.get(upstream_model)?;
+        Some(pricing.input_per_1m + pricing.output_per_1m)
     }
 
     pub fn upsert_provider(&mut self, provider: ProviderConfig) {
