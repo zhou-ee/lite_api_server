@@ -1,5 +1,5 @@
 use crate::{
-    core::{provider::ProviderKind, router::RoutePlan, state::AppState},
+    core::{provider::ProviderKind, router::{RoutePlan, RouteRuntimeHint}, state::AppState},
     telemetry::store::RequestLog,
 };
 use axum::{
@@ -13,7 +13,7 @@ use bytes::Bytes;
 use chrono::Utc;
 use reqwest::Response as UpstreamResponse;
 use serde_json::{json, Value};
-use std::time::Instant;
+use std::{collections::hash_map::DefaultHasher, hash::{Hash, Hasher}, time::Instant};
 use uuid::Uuid;
 
 pub async fn models(State(state): State<AppState>) -> Json<Value> {
@@ -55,9 +55,14 @@ pub async fn chat_completions(
     }
 
     let latency_snapshot = state.telemetry.provider_latency_snapshot().await.unwrap_or_default();
+    let hint = RouteRuntimeHint {
+        latency_ms: latency_snapshot,
+        cursor: state.next_routing_cursor(),
+        seed: request_seed(&request_id, &requested_model),
+    };
     let plan = {
         let config = state.config.read().await;
-        match RoutePlan::select(&config, &requested_model, &latency_snapshot) {
+        match RoutePlan::select(&config, &requested_model, &hint) {
             Ok(plan) => plan,
             Err(e) => {
                 return (
@@ -122,7 +127,7 @@ pub async fn chat_completions(
                         let usage = parse_usage(&body);
                         let estimated_price = {
                             let config = state.config.read().await;
-                            config.estimate_price(&plan.upstream_model, usage.0, usage.1)
+                            config.estimate_price(&provider.id, &plan.upstream_model, usage.0, usage.1)
                         };
 
                         let _ = state
@@ -362,6 +367,13 @@ fn add_gateway_headers(res: &mut Response, request_id: &str, provider_id: &str) 
     if let Ok(value) = HeaderValue::from_str(provider_id) {
         res.headers_mut().insert("x-lite-api-provider", value);
     }
+}
+
+fn request_seed(request_id: &str, model: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    request_id.hash(&mut hasher);
+    model.hash(&mut hasher);
+    hasher.finish()
 }
 
 fn parse_usage(body: &Bytes) -> (Option<i64>, Option<i64>, Option<i64>) {
