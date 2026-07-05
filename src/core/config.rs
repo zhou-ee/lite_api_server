@@ -11,6 +11,8 @@ pub struct AppConfig {
     pub aliases: HashMap<String, String>,
     pub routes: HashMap<String, RouteConfig>,
     pub clients: HashMap<String, ClientConfig>,
+    #[serde(default)]
+    pub pricing: HashMap<String, PricingConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +38,12 @@ pub struct RouteConfig {
 pub struct ClientConfig {
     pub api_key: String,
     pub allowed_models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PricingConfig {
+    pub input_per_1m: f64,
+    pub output_per_1m: f64,
 }
 
 impl AppConfig {
@@ -75,6 +83,18 @@ impl AppConfig {
                 None
             }
         })
+    }
+
+    pub fn estimate_price(
+        &self,
+        upstream_model: &str,
+        input_tokens: Option<i64>,
+        output_tokens: Option<i64>,
+    ) -> Option<f64> {
+        let pricing = self.pricing.get(upstream_model)?;
+        let input = input_tokens.unwrap_or_default().max(0) as f64;
+        let output = output_tokens.unwrap_or_default().max(0) as f64;
+        Some((input / 1_000_000.0) * pricing.input_per_1m + (output / 1_000_000.0) * pricing.output_per_1m)
     }
 
     pub fn upsert_provider(&mut self, provider: ProviderConfig) {
