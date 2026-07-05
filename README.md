@@ -2,18 +2,31 @@
 
 Lightweight Rust data-plane server for a self-hosted LLM API gateway.
 
-This service is intended to run on a small VPS, such as 1H1G, while the local UI/control plane lives in a separate repository: `zhou-ee/lite_api_local`.
+This service is designed to run on a small VPS while the local UI/control plane lives in a separate repository: `zhou-ee/lite_api_local`.
 
-## Implemented MVP
+## Current progress
+
+Implemented server-side capabilities:
 
 - OpenAI-compatible `POST /v1/chat/completions`
 - OpenAI-style `GET /v1/models`
+- streaming passthrough for OpenAI-compatible responses
 - provider pool config
 - model alias mapping
-- `priority_fallback` routing
-- client API-key auth
-- SQLite request/token telemetry
-- Admin API for config, providers, routes, logs and daily stats
+- route strategies:
+  - `priority_fallback`
+  - `weighted`
+  - `round_robin`
+  - `weighted_random`
+  - `lowest_latency`
+  - `cheapest`
+- provider-level model pricing with global model pricing fallback
+- client authentication and optional daily usage caps
+- SQLite request/token/cost telemetry
+- provider/model/client usage aggregation
+- config diagnostics
+- route preview
+- Admin API for config, providers, routes, aliases, logs and stats
 
 ## Runtime split
 
@@ -22,14 +35,15 @@ Local control panel: zhou-ee/lite_api_local
         ↓ admin API
 VPS data plane: zhou-ee/lite_api_server
         ↓ provider routing
-OpenAI / Claude / Gemini / OpenCode / New API / custom endpoints
+OpenAI-compatible upstream providers
 ```
+
+The local UI can be closed after configuration. Proxying, routing and logging happen in this server process.
 
 ## Quick start
 
 ```bash
 cp config.example.yaml config.yaml
-# edit provider api_key and admin_token
 cargo run -- --config config.yaml
 ```
 
@@ -45,37 +59,54 @@ List models:
 curl http://127.0.0.1:8080/v1/models
 ```
 
-Chat completion:
+## Smoke test flow
+
+After starting the server:
+
+1. Run health check.
+2. Run `/v1/models` and confirm aliases/routes appear.
+3. Run Admin diagnostics and fix reported errors.
+4. Run route preview for an alias such as `fast`.
+5. Send one chat completion request.
+6. Check logs and daily stats.
+7. Close the local UI and send another request to confirm server-side logging still works.
+
+See `docs/SMOKE_TEST.md` and `docs/ROUTING.md` for more detail.
+
+## Routing notes
+
+- `priority_fallback` keeps deterministic priority order.
+- `weighted` sorts by configured provider weight.
+- `round_robin` rotates provider order using an in-process cursor.
+- `weighted_random` samples a provider order from provider weights per request.
+- `lowest_latency` uses today's successful request latency from SQLite telemetry.
+- `cheapest` prefers provider-level model pricing, then global model pricing.
+
+## Pricing notes
+
+Pricing can be declared globally by model, and can also be declared on a provider for a specific model. Provider-level pricing wins over global pricing. This allows the same model to be routed differently when providers have different cost structures.
+
+## Development checklist
+
+Before considering a change usable:
 
 ```bash
-curl http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer local-test-key" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"fast","messages":[{"role":"user","content":"hello"}]}'
+cargo check
+cargo test
 ```
 
-Admin API:
+Manual checks:
 
-```bash
-curl http://127.0.0.1:8080/admin/stats/today \
-  -H "Authorization: Bearer change-me-admin-token"
-```
-
-## Config
-
-See `config.example.yaml`.
-
-Important fields:
-
-- `server.admin_token`: protects Admin API
-- `clients.default.api_key`: client API key used by Claude Code/Codex/OpenCode/etc.
-- `providers`: upstream provider pool
-- `aliases`: user-facing model aliases
-- `routes`: upstream routing rules
+- diagnostics has no errors
+- route preview matches expected provider order
+- healthcheck works for at least one provider
+- a non-streaming request records token/cost usage when upstream usage fields are present
+- a streaming request returns chunks and records request metadata
 
 ## Current limitations
 
-- upstream support is currently OpenAI-compatible only
-- streaming is proxied as a full buffered response for now
-- cost calculation is not implemented yet
-- secrets are stored in config file for MVP; production should add encrypted secret storage
+- upstream adapters beyond OpenAI-compatible are not complete yet
+- streaming token accounting is not complete yet
+- round-robin cursor is in-memory and resets on process restart
+- weighted-random uses in-process request-derived randomness, not persistent distribution accounting
+- secrets are stored in config for the MVP; production should add safer secret storage
