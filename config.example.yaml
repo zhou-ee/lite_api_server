@@ -1,0 +1,44 @@
+server:
+  bind: "0.0.0.0:8080"
+  admin_token: "change-me-admin-token"
+
+telemetry:
+  sqlite_path: "./gateway.db"
+  save_bodies: false
+  retention_days: 90
+
+providers:
+  - id: "openai-main"
+    kind: "openai_compatible"
+    base_url: "https://api.openai.com/v1"
+    api_key: "sk-replace-me"
+    enabled: true
+    priority: 1
+    weight: 10
+    timeout_ms: 60000
+    models:
+      - "gpt-4o"
+      - "gpt-5-mini"
+
+aliases:
+  fast: "gpt-5-mini"
+  smart: "gpt-4o"
+
+routes:
+  gpt-5-mini:
+    strategy: "priority_fallback"
+    providers:
+      - "openai-main"
+  gpt-4o:
+    strategy: "priority_fallback"
+    providers:
+      - "openai-main"
+
+clients:
+  default:
+    api_key: "local-test-key"
+    allowed_models:
+      - "fast"
+      - "smart"
+      - "gpt-5-mini"
+      - "gpt-4o"
