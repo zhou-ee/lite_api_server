@@ -50,9 +50,10 @@ pub async fn chat_completions(
         Err(response) => return response,
     };
 
+    let latency_snapshot = state.telemetry.provider_latency_snapshot().await.unwrap_or_default();
     let plan = {
         let config = state.config.read().await;
-        match RoutePlan::select(&config, &requested_model) {
+        match RoutePlan::select(&config, &requested_model, &latency_snapshot) {
             Ok(plan) => plan,
             Err(e) => {
                 return (
