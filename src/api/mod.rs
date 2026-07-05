@@ -12,7 +12,6 @@ pub fn router() -> Router<AppState> {
         .route("/v1/chat/completions", post(openai::chat_completions))
         .route("/admin/config", get(admin::get_config).put(admin::put_config))
         .route("/admin/logs", get(admin::get_logs))
-        .route("/admin/logs/cleanup", post(admin::cleanup_logs))
         .route("/admin/stats/today", get(admin::stats_today))
         .route("/admin/stats/providers", get(admin::stats_providers))
         .route("/admin/stats/models", get(admin::stats_models))
@@ -21,5 +20,4 @@ pub fn router() -> Router<AppState> {
         .route("/admin/providers/{id}/healthcheck", post(admin::healthcheck_provider))
         .route("/admin/routes", get(admin::list_routes).put(admin::put_routes))
         .route("/admin/aliases", get(admin::list_aliases).put(admin::put_aliases))
-        .route("/admin/pricing", get(admin::list_pricing).put(admin::put_pricing))
 }
