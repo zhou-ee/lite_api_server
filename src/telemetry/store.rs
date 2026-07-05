@@ -60,6 +60,12 @@ impl TelemetryStore {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_request_logs_ts ON request_logs(ts);")
             .execute(&self.pool)
             .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON request_logs(provider_id);")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_request_logs_model ON request_logs(requested_model, upstream_model);")
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -128,12 +134,7 @@ impl TelemetryStore {
     }
 
     pub async fn today_stats(&self) -> anyhow::Result<Value> {
-        let start_of_day = chrono::Utc::now()
-            .date_naive()
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp();
+        let start_of_day = start_of_today_utc();
 
         let row = sqlx::query(
             r#"
@@ -142,7 +143,9 @@ impl TelemetryStore {
               COALESCE(SUM(total_tokens), 0) as total_tokens,
               COALESCE(SUM(input_tokens), 0) as input_tokens,
               COALESCE(SUM(output_tokens), 0) as output_tokens,
-              COALESCE(AVG(latency_ms), 0) as avg_latency_ms
+              COALESCE(AVG(latency_ms), 0) as avg_latency_ms,
+              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
+              COALESCE(SUM(CASE WHEN status_code < 200 OR status_code >= 300 THEN 1 ELSE 0 END), 0) as error_count
             FROM request_logs
             WHERE ts >= ?
             "#,
@@ -153,10 +156,89 @@ impl TelemetryStore {
 
         Ok(json!({
             "request_count": row.get::<i64, _>("request_count"),
+            "success_count": row.get::<i64, _>("success_count"),
+            "error_count": row.get::<i64, _>("error_count"),
             "total_tokens": row.get::<i64, _>("total_tokens"),
             "input_tokens": row.get::<i64, _>("input_tokens"),
             "output_tokens": row.get::<i64, _>("output_tokens"),
             "avg_latency_ms": row.get::<f64, _>("avg_latency_ms")
         }))
     }
+
+    pub async fn provider_stats(&self) -> anyhow::Result<Value> {
+        let start_of_day = start_of_today_utc();
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              provider_id,
+              COUNT(*) as request_count,
+              COALESCE(SUM(total_tokens), 0) as total_tokens,
+              COALESCE(AVG(latency_ms), 0) as avg_latency_ms,
+              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
+              COALESCE(SUM(CASE WHEN status_code < 200 OR status_code >= 300 THEN 1 ELSE 0 END), 0) as error_count
+            FROM request_logs
+            WHERE ts >= ?
+            GROUP BY provider_id
+            ORDER BY request_count DESC
+            "#,
+        )
+        .bind(start_of_day)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(json!({
+            "data": rows.into_iter().map(|r| json!({
+                "provider_id": r.get::<String, _>("provider_id"),
+                "request_count": r.get::<i64, _>("request_count"),
+                "success_count": r.get::<i64, _>("success_count"),
+                "error_count": r.get::<i64, _>("error_count"),
+                "total_tokens": r.get::<i64, _>("total_tokens"),
+                "avg_latency_ms": r.get::<f64, _>("avg_latency_ms")
+            })).collect::<Vec<_>>()
+        }))
+    }
+
+    pub async fn model_stats(&self) -> anyhow::Result<Value> {
+        let start_of_day = start_of_today_utc();
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              requested_model,
+              upstream_model,
+              COUNT(*) as request_count,
+              COALESCE(SUM(total_tokens), 0) as total_tokens,
+              COALESCE(AVG(latency_ms), 0) as avg_latency_ms,
+              COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
+              COALESCE(SUM(CASE WHEN status_code < 200 OR status_code >= 300 THEN 1 ELSE 0 END), 0) as error_count
+            FROM request_logs
+            WHERE ts >= ?
+            GROUP BY requested_model, upstream_model
+            ORDER BY request_count DESC
+            "#,
+        )
+        .bind(start_of_day)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(json!({
+            "data": rows.into_iter().map(|r| json!({
+                "requested_model": r.get::<String, _>("requested_model"),
+                "upstream_model": r.get::<String, _>("upstream_model"),
+                "request_count": r.get::<i64, _>("request_count"),
+                "success_count": r.get::<i64, _>("success_count"),
+                "error_count": r.get::<i64, _>("error_count"),
+                "total_tokens": r.get::<i64, _>("total_tokens"),
+                "avg_latency_ms": r.get::<f64, _>("avg_latency_ms")
+            })).collect::<Vec<_>>()
+        }))
+    }
+}
+
+fn start_of_today_utc() -> i64 {
+    chrono::Utc::now()
+        .date_naive()
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp()
 }
