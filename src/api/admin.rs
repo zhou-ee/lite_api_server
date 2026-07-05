@@ -1,4 +1,10 @@
-use crate::{core::{config::{AppConfig, RouteConfig}, provider::ProviderConfig, state::AppState}};
+use crate::{
+    core::{
+        config::{AppConfig, RouteConfig},
+        provider::ProviderConfig,
+        state::AppState,
+    },
+};
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -73,7 +79,7 @@ pub async fn list_providers(
 ) -> Result<Json<Value>, StatusCode> {
     require_admin(&state, &headers).await?;
     let config = state.config.read().await;
-    Ok(Json(json!({"data": config.providers})))
+    Ok(Json(json!({"data": config.providers.clone()})))
 }
 
 pub async fn upsert_provider(
@@ -125,7 +131,7 @@ pub async fn list_routes(
 ) -> Result<Json<Value>, StatusCode> {
     require_admin(&state, &headers).await?;
     let config = state.config.read().await;
-    Ok(Json(json!({"data": config.routes})))
+    Ok(Json(json!({"data": config.routes.clone()})))
 }
 
 pub async fn put_routes(
