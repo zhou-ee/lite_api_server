@@ -98,6 +98,15 @@ impl TelemetryStore {
         Ok(())
     }
 
+    pub async fn delete_older_than_days(&self, retention_days: i64) -> anyhow::Result<u64> {
+        let cutoff = chrono::Utc::now().timestamp() - retention_days.max(1) * 86_400;
+        let result = sqlx::query("DELETE FROM request_logs WHERE ts < ?")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn recent_logs(&self, limit: i64) -> anyhow::Result<Vec<RequestLog>> {
         let rows = sqlx::query(
             r#"
@@ -143,6 +152,7 @@ impl TelemetryStore {
               COALESCE(SUM(total_tokens), 0) as total_tokens,
               COALESCE(SUM(input_tokens), 0) as input_tokens,
               COALESCE(SUM(output_tokens), 0) as output_tokens,
+              COALESCE(SUM(estimated_cost_usd), 0) as estimated_cost_usd,
               COALESCE(AVG(latency_ms), 0) as avg_latency_ms,
               COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
               COALESCE(SUM(CASE WHEN status_code < 200 OR status_code >= 300 THEN 1 ELSE 0 END), 0) as error_count
@@ -161,6 +171,7 @@ impl TelemetryStore {
             "total_tokens": row.get::<i64, _>("total_tokens"),
             "input_tokens": row.get::<i64, _>("input_tokens"),
             "output_tokens": row.get::<i64, _>("output_tokens"),
+            "estimated_cost_usd": row.get::<f64, _>("estimated_cost_usd"),
             "avg_latency_ms": row.get::<f64, _>("avg_latency_ms")
         }))
     }
@@ -173,6 +184,7 @@ impl TelemetryStore {
               provider_id,
               COUNT(*) as request_count,
               COALESCE(SUM(total_tokens), 0) as total_tokens,
+              COALESCE(SUM(estimated_cost_usd), 0) as estimated_cost_usd,
               COALESCE(AVG(latency_ms), 0) as avg_latency_ms,
               COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
               COALESCE(SUM(CASE WHEN status_code < 200 OR status_code >= 300 THEN 1 ELSE 0 END), 0) as error_count
@@ -193,6 +205,7 @@ impl TelemetryStore {
                 "success_count": r.get::<i64, _>("success_count"),
                 "error_count": r.get::<i64, _>("error_count"),
                 "total_tokens": r.get::<i64, _>("total_tokens"),
+                "estimated_cost_usd": r.get::<f64, _>("estimated_cost_usd"),
                 "avg_latency_ms": r.get::<f64, _>("avg_latency_ms")
             })).collect::<Vec<_>>()
         }))
@@ -207,6 +220,7 @@ impl TelemetryStore {
               upstream_model,
               COUNT(*) as request_count,
               COALESCE(SUM(total_tokens), 0) as total_tokens,
+              COALESCE(SUM(estimated_cost_usd), 0) as estimated_cost_usd,
               COALESCE(AVG(latency_ms), 0) as avg_latency_ms,
               COALESCE(SUM(CASE WHEN status_code >= 200 AND status_code < 300 THEN 1 ELSE 0 END), 0) as success_count,
               COALESCE(SUM(CASE WHEN status_code < 200 OR status_code >= 300 THEN 1 ELSE 0 END), 0) as error_count
@@ -228,6 +242,7 @@ impl TelemetryStore {
                 "success_count": r.get::<i64, _>("success_count"),
                 "error_count": r.get::<i64, _>("error_count"),
                 "total_tokens": r.get::<i64, _>("total_tokens"),
+                "estimated_cost_usd": r.get::<f64, _>("estimated_cost_usd"),
                 "avg_latency_ms": r.get::<f64, _>("avg_latency_ms")
             })).collect::<Vec<_>>()
         }))
