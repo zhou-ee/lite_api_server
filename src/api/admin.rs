@@ -230,6 +230,35 @@ pub async fn put_routes(
     Ok(Json(json!({"ok": true, "message": "routes updated"})))
 }
 
+pub async fn list_aliases(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode> {
+    require_admin(&state, &headers).await?;
+    let config = state.config.read().await;
+    Ok(Json(json!({"data": config.aliases.clone()})))
+}
+
+pub async fn put_aliases(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(aliases): Json<HashMap<String, String>>,
+) -> Result<Json<Value>, StatusCode> {
+    require_admin(&state, &headers).await?;
+
+    let saved_config = {
+        let mut config = state.config.write().await;
+        config.aliases = aliases;
+        config.clone()
+    };
+
+    saved_config
+        .save(&state.config_path)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(json!({"ok": true, "message": "aliases updated"})))
+}
+
 async fn upsert_and_save(state: &AppState, provider: ProviderConfig) -> Result<Json<Value>, StatusCode> {
     let provider_id = provider.id.clone();
     let saved_config = {
