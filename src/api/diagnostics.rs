@@ -1,5 +1,5 @@
 use crate::{
-    core::{diagnostics::analyze_config, router::RoutePlan, state::AppState},
+    core::{diagnostics::analyze_config, router::{RoutePlan, RouteRuntimeHint}, state::AppState},
 };
 use axum::{extract::{Query, State}, http::{HeaderMap, StatusCode}, Json};
 use serde::Deserialize;
@@ -26,9 +26,14 @@ pub async fn preview_route(
 ) -> Result<Json<Value>, StatusCode> {
     require_management_access(&state, &headers).await?;
     let latency = state.telemetry.provider_latency_snapshot().await.unwrap_or_default();
+    let hint = RouteRuntimeHint {
+        latency_ms: latency.clone(),
+        cursor: state.next_routing_cursor(),
+        seed: 1,
+    };
     let config = state.config.read().await;
 
-    match RoutePlan::select(&config, &query.model, &latency) {
+    match RoutePlan::select(&config, &query.model, &hint) {
         Ok(plan) => Ok(Json(json!({
             "ok": true,
             "requested_model": plan.requested_model,
