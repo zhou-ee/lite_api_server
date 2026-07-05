@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct TelemetryStore {
@@ -105,6 +106,26 @@ impl TelemetryStore {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected())
+    }
+
+    pub async fn provider_latency_snapshot(&self) -> anyhow::Result<HashMap<String, f64>> {
+        let start_of_day = start_of_today_utc();
+        let rows = sqlx::query(
+            r#"
+            SELECT provider_id, COALESCE(AVG(latency_ms), 0) as avg_latency_ms
+            FROM request_logs
+            WHERE ts >= ? AND status_code >= 200 AND status_code < 300
+            GROUP BY provider_id
+            "#,
+        )
+        .bind(start_of_day)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get::<String, _>("provider_id"), r.get::<f64, _>("avg_latency_ms")))
+            .collect())
     }
 
     pub async fn recent_logs(&self, limit: i64) -> anyhow::Result<Vec<RequestLog>> {
