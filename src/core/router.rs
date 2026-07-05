@@ -27,8 +27,25 @@ impl RoutePlan {
             .cloned()
             .collect::<Vec<_>>();
 
-        if route.strategy == "priority_fallback" {
-            provider_ids.sort_by_key(|id| config.provider(id).map(|p| p.priority).unwrap_or(i32::MAX));
+        match route.strategy.as_str() {
+            "priority_fallback" => {
+                provider_ids.sort_by_key(|id| config.provider(id).map(|p| p.priority).unwrap_or(i32::MAX));
+            }
+            "weighted" => {
+                provider_ids.sort_by_key(|id| -config.provider(id).map(|p| p.weight).unwrap_or_default());
+            }
+            "cheapest" => {
+                provider_ids.sort_by(|a, b| {
+                    let a_score = model_price_score(config, &upstream_model).unwrap_or(f64::MAX)
+                        + config.provider(a).map(|p| p.priority as f64 / 1000.0).unwrap_or(0.0);
+                    let b_score = model_price_score(config, &upstream_model).unwrap_or(f64::MAX)
+                        + config.provider(b).map(|p| p.priority as f64 / 1000.0).unwrap_or(0.0);
+                    a_score.partial_cmp(&b_score).unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+            _ => {
+                provider_ids.sort_by_key(|id| config.provider(id).map(|p| p.priority).unwrap_or(i32::MAX));
+            }
         }
 
         if provider_ids.is_empty() {
@@ -41,4 +58,9 @@ impl RoutePlan {
             provider_ids,
         })
     }
+}
+
+fn model_price_score(config: &AppConfig, upstream_model: &str) -> Option<f64> {
+    let pricing = config.pricing.get(upstream_model)?;
+    Some(pricing.input_per_1m + pricing.output_per_1m)
 }
