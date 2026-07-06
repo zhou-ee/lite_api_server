@@ -90,6 +90,41 @@ pub async fn exchange_code(
     Ok(Json(json!({"ok": true, "provider_id": provider.id, "oauth_email": provider.oauth_email})))
 }
 
+pub async fn refresh_provider_token_if_needed(state: &AppState, provider: ProviderConfig) -> ProviderConfig {
+    let Some(refresh_token) = provider.refresh_token.clone() else {
+        return provider;
+    };
+
+    let should_refresh = provider
+        .token_expiry
+        .map(|expiry| expiry <= Utc::now().timestamp() + 120)
+        .unwrap_or(false);
+
+    if !should_refresh {
+        return provider;
+    }
+
+    let Ok(token) = refresh_access_token(state, &refresh_token).await else {
+        return provider;
+    };
+
+    let mut next = provider;
+    next.api_key = token.access_token;
+    next.token_expiry = token.expires_in.map(|seconds| Utc::now().timestamp() + seconds);
+    if token.refresh_token.is_some() {
+        next.refresh_token = token.refresh_token;
+    }
+
+    let saved_config = {
+        let mut config = state.config.write().await;
+        config.upsert_provider(next.clone());
+        config.clone()
+    };
+    let _ = saved_config.save(&state.config_path);
+
+    next
+}
+
 async fn exchange_and_store(
     state: &AppState,
     code: String,
@@ -143,6 +178,30 @@ async fn exchange_code_for_token(state: &AppState, code: &str, redirect_uri: &st
             ("client_secret", client_secret.as_str()),
             ("redirect_uri", redirect_uri),
             ("grant_type", "authorization_code"),
+        ])
+        .send()
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
+
+    if !response.status().is_success() {
+        return Err(StatusCode::BAD_GATEWAY);
+    }
+
+    response.json::<TokenResponse>().await.map_err(|_| StatusCode::BAD_GATEWAY)
+}
+
+async fn refresh_access_token(state: &AppState, refresh_token: &str) -> Result<TokenResponse, StatusCode> {
+    let client_id = google_client_id().map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let client_secret = google_client_secret().map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+
+    let response = state
+        .http
+        .post(GOOGLE_TOKEN_URL)
+        .form(&[
+            ("refresh_token", refresh_token),
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            ("grant_type", "refresh_token"),
         ])
         .send()
         .await
