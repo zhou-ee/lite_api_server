@@ -250,7 +250,7 @@ fn google_client_secret() -> Result<String, std::env::VarError> {
 }
 
 fn default_redirect_uri() -> String {
-    std::env::var("LITE_API_GOOGLE_REDIRECT_URI").unwrap_or_else(|_| "http://127.0.0.1:8082/oauth-callback".to_string())
+    std::env::var("LITE_API_GOOGLE_REDIRECT_URI").unwrap_or_else(|_| "http://127.0.0.1:8082/google/callback".to_string())
 }
 
 fn enc(input: &str) -> String {
