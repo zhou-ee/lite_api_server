@@ -1,5 +1,5 @@
 use crate::{
-    api::oauth::refresh_provider_token_if_needed,
+    api::{gemini::send_gemini_as_openai, oauth::refresh_provider_token_if_needed},
     core::{provider::ProviderKind, router::{RoutePlan, RouteRuntimeHint}, state::AppState},
     telemetry::store::RequestLog,
 };
@@ -99,6 +99,50 @@ pub async fn chat_completions(
             }
         };
         let provider = refresh_provider_token_if_needed(&state, provider).await;
+
+        if provider.kind == ProviderKind::Gemini {
+            match send_gemini_as_openai(&state, &provider, &plan.upstream_model, payload.clone()).await {
+                Ok((status, content_type, body)) => {
+                    let latency_ms = started.elapsed().as_millis() as i64;
+                    let usage = parse_usage(&body);
+                    let estimated_price = {
+                        let config = state.config.read().await;
+                        config.estimate_price(&provider.id, &plan.upstream_model, usage.0, usage.1)
+                    };
+                    let _ = state
+                        .telemetry
+                        .record_request(RequestLog {
+                            id: request_id.clone(),
+                            ts: Utc::now().timestamp(),
+                            client_name: client_name.clone(),
+                            provider_id: provider.id.clone(),
+                            requested_model: plan.requested_model.clone(),
+                            upstream_model: plan.upstream_model.clone(),
+                            status_code: status.as_u16() as i64,
+                            error_type: if status.is_success() { None } else { Some(status.to_string()) },
+                            latency_ms,
+                            input_tokens: usage.0,
+                            output_tokens: usage.1,
+                            total_tokens: usage.2,
+                            estimated_cost_usd: estimated_price,
+                            route_strategy: Some(plan.strategy.clone()),
+                        })
+                        .await;
+
+                    let mut res = Response::new(Body::from(body));
+                    *res.status_mut() = status;
+                    if let Some(ct) = content_type {
+                        res.headers_mut().insert("content-type", ct);
+                    }
+                    add_gateway_headers(&mut res, &request_id, &provider.id, &plan.strategy, &plan.upstream_model);
+                    return res;
+                }
+                Err(e) => {
+                    last_error = Some(e.to_string());
+                    continue;
+                }
+            }
+        }
 
         if provider.kind != ProviderKind::OpenaiCompatible {
             last_error = Some(format!("provider kind is not supported by /v1/chat/completions yet: {:?}", provider.kind));
