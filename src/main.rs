@@ -45,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
         config: Arc::new(RwLock::new(config)),
         telemetry,
         http: reqwest::Client::new(),
-        routing_cursor: Arc::new(AtomicU64::new(0)),
+        route_cursors: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
     let app: Router = api::router()

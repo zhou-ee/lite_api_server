@@ -26,9 +26,13 @@ pub async fn preview_route(
 ) -> Result<Json<Value>, StatusCode> {
     require_management_access(&state, &headers).await?;
     let latency = state.telemetry.provider_latency_snapshot().await.unwrap_or_default();
+    let upstream_model = {
+        let config = state.config.read().await;
+        config.resolve_alias(&query.model).to_string()
+    };
     let hint = RouteRuntimeHint {
         latency_ms: latency.clone(),
-        cursor: state.next_routing_cursor(),
+        cursor: state.next_routing_cursor(&upstream_model),
         seed: 1,
     };
     let config = state.config.read().await;

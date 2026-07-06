@@ -7,6 +7,7 @@ pub struct RoutePlan {
     pub requested_model: String,
     pub upstream_model: String,
     pub provider_ids: Vec<String>,
+    pub strategy: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -85,10 +86,13 @@ impl RoutePlan {
             bail!("no enabled provider available for model: {upstream_model}");
         }
 
+        let strategy = route.strategy.clone();
+
         Ok(Self {
             requested_model: requested_model.to_string(),
             upstream_model,
             provider_ids,
+            strategy,
         })
     }
 }

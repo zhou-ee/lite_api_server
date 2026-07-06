@@ -55,9 +55,13 @@ pub async fn chat_completions(
     }
 
     let latency_snapshot = state.telemetry.provider_latency_snapshot().await.unwrap_or_default();
+    let upstream_model = {
+        let config = state.config.read().await;
+        config.resolve_alias(&requested_model).to_string()
+    };
     let hint = RouteRuntimeHint {
         latency_ms: latency_snapshot,
-        cursor: state.next_routing_cursor(),
+        cursor: state.next_routing_cursor(&upstream_model),
         seed: request_seed(&request_id, &requested_model),
     };
     let plan = {
@@ -117,6 +121,7 @@ pub async fn chat_completions(
                         provider.id,
                         plan.requested_model,
                         plan.upstream_model,
+                        plan.strategy,
                         started,
                     );
                 }
@@ -146,6 +151,7 @@ pub async fn chat_completions(
                                 output_tokens: usage.1,
                                 total_tokens: usage.2,
                                 estimated_cost_usd: estimated_price,
+                                route_strategy: Some(plan.strategy.clone()),
                             })
                             .await;
 
@@ -154,7 +160,13 @@ pub async fn chat_completions(
                         if let Some(ct) = content_type {
                             res.headers_mut().insert("content-type", ct);
                         }
-                        add_gateway_headers(&mut res, &request_id, &provider.id);
+                        add_gateway_headers(
+                            &mut res,
+                            &request_id,
+                            &provider.id,
+                            &plan.strategy,
+                            &plan.upstream_model,
+                        );
                         return res;
                     }
                     Err(e) => {
@@ -188,6 +200,7 @@ pub async fn chat_completions(
             output_tokens: None,
             total_tokens: None,
             estimated_cost_usd: None,
+            route_strategy: Some(plan.strategy),
         })
         .await;
 
@@ -323,6 +336,7 @@ fn stream_response(
     provider_id: String,
     requested_model: String,
     upstream_model: String,
+    strategy: String,
     started: Instant,
 ) -> Response {
     let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -331,6 +345,8 @@ fn stream_response(
     let telemetry = state.telemetry.clone();
     let request_id_for_log = request_id.clone();
     let provider_id_for_log = provider_id.clone();
+    let strategy_for_log = strategy.clone();
+    let upstream_model_for_log = upstream_model.clone();
     tokio::spawn(async move {
         let _ = telemetry
             .record_request(RequestLog {
@@ -339,7 +355,7 @@ fn stream_response(
                 client_name,
                 provider_id: provider_id_for_log,
                 requested_model,
-                upstream_model,
+                upstream_model: upstream_model_for_log,
                 status_code: status.as_u16() as i64,
                 error_type: if status.is_success() { None } else { Some(status.to_string()) },
                 latency_ms: started.elapsed().as_millis() as i64,
@@ -347,6 +363,7 @@ fn stream_response(
                 output_tokens: None,
                 total_tokens: None,
                 estimated_cost_usd: None,
+                route_strategy: Some(strategy_for_log),
             })
             .await;
     });
@@ -356,16 +373,34 @@ fn stream_response(
     if let Some(ct) = content_type {
         res.headers_mut().insert("content-type", ct);
     }
-    add_gateway_headers(&mut res, &request_id, &provider_id);
+    add_gateway_headers(
+        &mut res,
+        &request_id,
+        &provider_id,
+        &strategy,
+        &upstream_model,
+    );
     res
 }
 
-fn add_gateway_headers(res: &mut Response, request_id: &str, provider_id: &str) {
+fn add_gateway_headers(
+    res: &mut Response,
+    request_id: &str,
+    provider_id: &str,
+    route_strategy: &str,
+    upstream_model: &str,
+) {
     if let Ok(value) = HeaderValue::from_str(request_id) {
         res.headers_mut().insert("x-lite-api-request-id", value);
     }
     if let Ok(value) = HeaderValue::from_str(provider_id) {
         res.headers_mut().insert("x-lite-api-provider", value);
+    }
+    if let Ok(value) = HeaderValue::from_str(route_strategy) {
+        res.headers_mut().insert("x-lite-api-route-strategy", value);
+    }
+    if let Ok(value) = HeaderValue::from_str(upstream_model) {
+        res.headers_mut().insert("x-lite-api-upstream-model", value);
     }
 }
 

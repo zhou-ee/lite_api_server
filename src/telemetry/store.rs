@@ -23,6 +23,7 @@ pub struct RequestLog {
     pub output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
     pub estimated_cost_usd: Option<f64>,
+    pub route_strategy: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -58,12 +59,27 @@ impl TelemetryStore {
               input_tokens INTEGER,
               output_tokens INTEGER,
               total_tokens INTEGER,
-              estimated_cost_usd REAL
+              estimated_cost_usd REAL,
+              route_strategy TEXT
             );
             "#,
         )
         .execute(&self.pool)
         .await?;
+
+        // Handle migration for existing table without route_strategy column
+        let table_info: Vec<sqlx::sqlite::SqliteRow> = sqlx::query("PRAGMA table_info(request_logs)")
+            .fetch_all(&self.pool)
+            .await?;
+        let has_route_strategy = table_info
+            .iter()
+            .any(|row| row.get::<String, _>("name") == "route_strategy");
+
+        if !has_route_strategy {
+            sqlx::query("ALTER TABLE request_logs ADD COLUMN route_strategy TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_request_logs_ts ON request_logs(ts);")
             .execute(&self.pool)
@@ -87,8 +103,8 @@ impl TelemetryStore {
             INSERT INTO request_logs (
               id, ts, client_name, provider_id, requested_model, upstream_model,
               status_code, error_type, latency_ms, input_tokens, output_tokens,
-              total_tokens, estimated_cost_usd
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              total_tokens, estimated_cost_usd, route_strategy
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(log.id)
@@ -104,6 +120,7 @@ impl TelemetryStore {
         .bind(log.output_tokens)
         .bind(log.total_tokens)
         .bind(log.estimated_cost_usd)
+        .bind(log.route_strategy)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -167,7 +184,7 @@ impl TelemetryStore {
             r#"
             SELECT id, ts, client_name, provider_id, requested_model, upstream_model,
                    status_code, error_type, latency_ms, input_tokens, output_tokens,
-                   total_tokens, estimated_cost_usd
+                   total_tokens, estimated_cost_usd, route_strategy
             FROM request_logs
             ORDER BY ts DESC
             LIMIT ?
@@ -193,6 +210,7 @@ impl TelemetryStore {
                 output_tokens: r.get("output_tokens"),
                 total_tokens: r.get("total_tokens"),
                 estimated_cost_usd: r.get("estimated_cost_usd"),
+                route_strategy: r.get("route_strategy"),
             })
             .collect())
     }
