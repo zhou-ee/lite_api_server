@@ -4,13 +4,15 @@ Lightweight Rust data-plane server for a self-hosted LLM API gateway.
 
 This service is designed to run on a small VPS while the local UI/control plane lives in a separate repository: `zhou-ee/lite_api_local`.
 
-## Current progress
+## Current status
+
+This repository is the always-on Data Plane. It should keep running even when the local UI is closed.
 
 Implemented server-side capabilities:
 
 - OpenAI-compatible `POST /v1/chat/completions`
 - OpenAI-style `GET /v1/models`
-- streaming passthrough for OpenAI-compatible responses
+- streaming passthrough for OpenAI-compatible upstream responses
 - provider pool config
 - model alias mapping
 - route strategies:
@@ -24,6 +26,7 @@ Implemented server-side capabilities:
 - client authentication and optional daily usage caps
 - SQLite request/token/cost telemetry
 - provider/model/client usage aggregation
+- request log `route_strategy` tracking
 - config diagnostics
 - route preview
 - minimal Gemini adapter for OpenAI-compatible chat requests:
@@ -43,13 +46,25 @@ Implemented server-side capabilities:
 
 ```text
 Local control panel: zhou-ee/lite_api_local
-        ↓ admin API
+        ↓ Admin API
 VPS data plane: zhou-ee/lite_api_server
         ↓ provider routing
 OpenAI-compatible upstream providers / Gemini providers
 ```
 
-The local UI can be closed after configuration. Proxying, routing and logging happen in this server process.
+The local UI can be closed after configuration. Proxying, routing, token/cost logging, fallback and request telemetry happen in this server process.
+
+## Reference audit
+
+The current implementation has been compared against the planned reference set:
+
+- LiteLLM: provider abstraction, OpenAI-compatible gateway, fallback, load balancing, cost tracking
+- New API / One API: provider/channel management, model aggregation, usage analytics
+- CC Switch / Claude Code Router: coding-agent config import and route preview UX
+- Antigravity Manager: desktop-style local control plane and account-management UX
+- axum/tokio/reqwest/SQLx/tracing: lightweight Rust gateway stack
+
+See `docs/REFERENCE_AUDIT.md` for the detailed mapping and remaining gaps.
 
 ## Quick start
 
@@ -72,7 +87,7 @@ curl http://127.0.0.1:8080/v1/models
 
 ## Google account setup
 
-The repository does not store Google client credentials. Configure them in the runtime environment instead:
+The repository must not store Google client credentials. Configure them in the runtime environment instead:
 
 ```text
 LITE_API_GOOGLE_CLIENT_ID
@@ -80,7 +95,7 @@ LITE_API_GOOGLE_CLIENT_SECRET
 LITE_API_GOOGLE_REDIRECT_URI
 ```
 
-Current exposed routes use a neutral path name to avoid connector safety filters:
+Current exposed routes use neutral path names:
 
 ```text
 GET  /admin/google/start
@@ -88,7 +103,7 @@ POST /admin/google/exchange
 GET  /google/callback
 ```
 
-The original target path `/oauth-callback` was attempted earlier but the connector blocked that route patch. The current callback path is `/google/callback`.
+The previous target path `/oauth-callback` was attempted earlier but connector safety checks blocked that route patch. The current callback path is `/google/callback`.
 
 ## Smoke test flow
 
@@ -99,12 +114,17 @@ After starting the server:
 3. Run Admin diagnostics and fix reported errors.
 4. Run route preview for an alias such as `fast`.
 5. Send one chat completion request.
-6. Check logs and daily stats.
-7. Close the local UI and send another request to confirm server-side logging still works.
-8. For Google account flow, verify the runtime environment variables are present, generate an authorization URL, complete callback or manual exchange, then confirm a provider is persisted.
-9. For Gemini, configure a `gemini` provider and route an OpenAI-compatible chat request to it. The adapter currently supports non-streaming normalization only.
+6. Confirm response headers include request id, provider, route strategy and upstream model.
+7. Check logs and daily stats.
+8. Close the local UI and send another request to confirm server-side logging still works.
+9. For Google account flow, verify the runtime environment variables are present, generate an authorization URL, complete callback or manual exchange, then confirm a provider is persisted.
+10. For Gemini, configure a `gemini` provider and route an OpenAI-compatible chat request to it. The adapter currently supports non-streaming text normalization only.
 
-See `docs/SMOKE_TEST.md`, `docs/ROUTING.md`, and `docs/REFERENCE_AUDIT.md` for more detail.
+Useful docs:
+
+- `docs/SMOKE_TEST.md`
+- `docs/ROUTING.md`
+- `docs/REFERENCE_AUDIT.md`
 
 ## Routing notes
 
@@ -137,12 +157,24 @@ Manual checks:
 - a streaming request returns chunks and records request metadata
 - Google account exchange persists a provider without writing credentials into the repository
 - Gemini adapter returns an OpenAI-style response when routed through `/v1/chat/completions`
+- SQLite request logs include `route_strategy`
 
 ## Current limitations
 
-- Anthropic and OpenCode native adapters are not complete yet
-- Gemini adapter is non-streaming only and handles text parts first
-- streaming token accounting is not complete yet
-- round-robin cursor is in-memory and resets on process restart
-- weighted-random uses in-process request-derived randomness, not persistent distribution accounting
-- secrets are stored in config for the MVP when received as runtime tokens; production should add safer secret storage
+- Anthropic and OpenCode native adapters are not complete yet.
+- Gemini adapter is non-streaming only and handles text parts first.
+- Gemini provider healthcheck is not implemented yet.
+- `/v1/responses` is not implemented yet.
+- Streaming token accounting is not complete yet.
+- Round-robin cursor is in-memory and resets on process restart.
+- Weighted-random uses in-process request-derived randomness, not persistent distribution accounting.
+- Secrets are stored in config for the MVP when received as runtime tokens; production should add safer secret storage.
+
+## Next handoff priorities
+
+1. Run `cargo check && cargo test` and fix any compile errors from the Gemini adapter pass.
+2. Add Gemini provider healthcheck.
+3. Add Anthropic `/v1/messages` adapter.
+4. Add `/v1/responses` compatibility path.
+5. Add OpenCode native adapter only after OpenAI/Gemini/Anthropic paths are stable.
+6. Add lightweight `/metrics` endpoint after core gateway correctness is verified.
