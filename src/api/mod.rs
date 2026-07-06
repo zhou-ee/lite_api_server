@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod diagnostics;
+pub mod gemini;
 pub mod health;
 pub mod oauth;
 pub mod openai;
