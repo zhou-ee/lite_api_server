@@ -29,4 +29,12 @@ pub struct ProviderConfig {
     pub models: Vec<String>,
     #[serde(default)]
     pub pricing: HashMap<String, ProviderPricingConfig>,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub token_expiry: Option<i64>,
+    #[serde(default)]
+    pub oauth_email: Option<String>,
+    #[serde(default)]
+    pub oauth_provider: Option<String>,
 }
