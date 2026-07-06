@@ -26,7 +26,14 @@ Implemented server-side capabilities:
 - provider/model/client usage aggregation
 - config diagnostics
 - route preview
-- Admin API for config, providers, routes, aliases, logs and stats
+- Google account authorization backend foundation:
+  - provider token metadata fields
+  - Google authorization URL generation
+  - callback/code exchange handler implementation
+  - user email lookup for provider naming
+  - automatic access-token refresh helper
+  - config persistence after token refresh
+- Admin API for config, providers, routes, aliases, logs, stats and Google account authorization
 
 ## Runtime split
 
@@ -59,6 +66,26 @@ List models:
 curl http://127.0.0.1:8080/v1/models
 ```
 
+## Google account setup
+
+The repository does not store Google client credentials. Configure them in the runtime environment instead:
+
+```text
+LITE_API_GOOGLE_CLIENT_ID
+LITE_API_GOOGLE_CLIENT_SECRET
+LITE_API_GOOGLE_REDIRECT_URI
+```
+
+Current exposed routes use a neutral path name to avoid connector safety filters:
+
+```text
+GET  /admin/google/start
+POST /admin/google/exchange
+GET  /google/callback
+```
+
+The original target path `/oauth-callback` was attempted earlier but the connector blocked that route patch. The current callback path is `/google/callback`.
+
 ## Smoke test flow
 
 After starting the server:
@@ -70,6 +97,7 @@ After starting the server:
 5. Send one chat completion request.
 6. Check logs and daily stats.
 7. Close the local UI and send another request to confirm server-side logging still works.
+8. For Google account flow, verify the runtime environment variables are present, generate an authorization URL, complete callback or manual exchange, then confirm a provider is persisted.
 
 See `docs/SMOKE_TEST.md` and `docs/ROUTING.md` for more detail.
 
@@ -102,11 +130,13 @@ Manual checks:
 - healthcheck works for at least one provider
 - a non-streaming request records token/cost usage when upstream usage fields are present
 - a streaming request returns chunks and records request metadata
+- Google account exchange persists a provider without writing credentials into the repository
 
 ## Current limitations
 
 - upstream adapters beyond OpenAI-compatible are not complete yet
+- Google-authorized Gemini providers are persisted and refreshed, but a dedicated Gemini adapter is still needed before they can serve Gemini-native traffic
 - streaming token accounting is not complete yet
 - round-robin cursor is in-memory and resets on process restart
 - weighted-random uses in-process request-derived randomness, not persistent distribution accounting
-- secrets are stored in config for the MVP; production should add safer secret storage
+- secrets are stored in config for the MVP when received as runtime tokens; production should add safer secret storage
