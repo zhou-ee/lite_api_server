@@ -1,4 +1,5 @@
 use crate::{
+    api::oauth::refresh_provider_token_if_needed,
     core::{provider::ProviderKind, router::{RoutePlan, RouteRuntimeHint}, state::AppState},
     telemetry::store::RequestLog,
 };
@@ -97,6 +98,7 @@ pub async fn chat_completions(
                 }
             }
         };
+        let provider = refresh_provider_token_if_needed(&state, provider).await;
 
         if provider.kind != ProviderKind::OpenaiCompatible {
             last_error = Some(format!("provider kind is not supported by /v1/chat/completions yet: {:?}", provider.kind));
