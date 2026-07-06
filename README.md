@@ -26,6 +26,10 @@ Implemented server-side capabilities:
 - provider/model/client usage aggregation
 - config diagnostics
 - route preview
+- minimal Gemini adapter for OpenAI-compatible chat requests:
+  - OpenAI messages -> Gemini `generateContent`
+  - Gemini response -> OpenAI chat completion shape
+  - Gemini usage metadata -> OpenAI-style usage fields
 - Google account authorization backend foundation:
   - provider token metadata fields
   - Google authorization URL generation
@@ -42,7 +46,7 @@ Local control panel: zhou-ee/lite_api_local
         ↓ admin API
 VPS data plane: zhou-ee/lite_api_server
         ↓ provider routing
-OpenAI-compatible upstream providers
+OpenAI-compatible upstream providers / Gemini providers
 ```
 
 The local UI can be closed after configuration. Proxying, routing and logging happen in this server process.
@@ -98,8 +102,9 @@ After starting the server:
 6. Check logs and daily stats.
 7. Close the local UI and send another request to confirm server-side logging still works.
 8. For Google account flow, verify the runtime environment variables are present, generate an authorization URL, complete callback or manual exchange, then confirm a provider is persisted.
+9. For Gemini, configure a `gemini` provider and route an OpenAI-compatible chat request to it. The adapter currently supports non-streaming normalization only.
 
-See `docs/SMOKE_TEST.md` and `docs/ROUTING.md` for more detail.
+See `docs/SMOKE_TEST.md`, `docs/ROUTING.md`, and `docs/REFERENCE_AUDIT.md` for more detail.
 
 ## Routing notes
 
@@ -131,11 +136,12 @@ Manual checks:
 - a non-streaming request records token/cost usage when upstream usage fields are present
 - a streaming request returns chunks and records request metadata
 - Google account exchange persists a provider without writing credentials into the repository
+- Gemini adapter returns an OpenAI-style response when routed through `/v1/chat/completions`
 
 ## Current limitations
 
-- upstream adapters beyond OpenAI-compatible are not complete yet
-- Google-authorized Gemini providers are persisted and refreshed, but a dedicated Gemini adapter is still needed before they can serve Gemini-native traffic
+- Anthropic and OpenCode native adapters are not complete yet
+- Gemini adapter is non-streaming only and handles text parts first
 - streaming token accounting is not complete yet
 - round-robin cursor is in-memory and resets on process restart
 - weighted-random uses in-process request-derived randomness, not persistent distribution accounting
